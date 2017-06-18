@@ -1,6 +1,5 @@
 package me.itzg.slowstart;
 
-import org.hamcrest.CoreMatchers;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -10,14 +9,18 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.IntStream;
 
+import static me.itzg.slowstart.TestUtils.assertIntInBuf;
+import static me.itzg.slowstart.TestUtils.createPayload;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.not;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Created by geoff on 6/17/17.
@@ -26,6 +29,7 @@ public class SlowStartEventQueueTest {
 
     @Rule
     public TemporaryFolder temp = new TemporaryFolder();
+
     private ExecutorService executor;
 
     @Before
@@ -41,11 +45,11 @@ public class SlowStartEventQueueTest {
     @Test(timeout = 5000)
     public void testBasic() throws Exception {
         final File tempFolder = temp.newFolder();
-        final List<ByteBuffer> recv = new ArrayList<>();
+        final List<ByteBuffer> recv = Collections.synchronizedList(new ArrayList<>());
         final SlowStartEventQueue queue = new SlowStartEventQueue("apple",
-                                                                  tempFolder.toPath(),
-                                                                  executor,
-                                                                  recv::add);
+                                                                  (key,bb)->recv.add(bb), tempFolder.toPath(),
+                                                                  executor
+        );
 
         queue.publish(createPayload(1));
         queue.publish(createPayload(2));
@@ -60,18 +64,19 @@ public class SlowStartEventQueueTest {
             Thread.sleep(100);
         }
 
-        IntStream.range(0, 6)
-                .forEachOrdered(i -> assertLongInBuf(i+1, recv.get(i)));
+        for (int i = 0; i < 6; i++) {
+            assertIntInBuf(i+1, recv.get(i));
+        }
     }
 
     @Test(timeout = 30000)
     public void testStress() throws Exception {
         final File tempFolder = temp.newFolder();
-        final List<ByteBuffer> recv = new ArrayList<>();
+        final List<ByteBuffer> recv = Collections.synchronizedList(new ArrayList<>());
         final SlowStartEventQueue queue = new SlowStartEventQueue("orange",
-                                                                  tempFolder.toPath(),
-                                                                  executor,
-                                                                  recv::add);
+                                                                  (key,bb)->recv.add(bb), tempFolder.toPath(),
+                                                                  executor
+        );
 
         final int preReady = 500000;
         final int postReady = 100000;
@@ -97,11 +102,12 @@ public class SlowStartEventQueueTest {
         }
         final long timeToDrainNS = queue.getStats().getTimeToDrainNS();
         final float drainSec = timeToDrainNS / 1e9f;
-        System.out.printf("Time to drain %dns or %fsec at %f msg/sec%n",
+        System.out.printf("Time to drain %d messages is %dns or %fsec at %f msg/sec%n",
+                          queue.getStats().getDrained(),
                           timeToDrainNS, drainSec, recv.size()/drainSec);
 
         for (int i = 0; i < expectedTotal; i++) {
-            assertLongInBuf(i+1, recv.get(i));
+            assertIntInBuf(i+1, recv.get(i));
         }
 
         assertThat(queue.getStats().getPreReady(), not(equalTo(0)));
@@ -115,29 +121,17 @@ public class SlowStartEventQueueTest {
     @Test
     public void testReadyBeforePublish() throws Exception {
         final File tempFolder = temp.newFolder();
-        final List<ByteBuffer> recv = new ArrayList<>();
+        final List<ByteBuffer> recv = Collections.synchronizedList(new ArrayList<>());
         final SlowStartEventQueue queue = new SlowStartEventQueue("pear",
-                                                                  tempFolder.toPath(),
-                                                                  executor,
-                                                                  recv::add);
+                                                                  (key,bb)->recv.add(bb), tempFolder.toPath(),
+                                                                  executor
+        );
 
         queue.ready();
         queue.publish(createPayload(2));
 
         assertEquals(1, recv.size());
-        assertLongInBuf(2, recv.get(0));
+        assertIntInBuf(2, recv.get(0));
     }
 
-    private void assertLongInBuf(int expected, ByteBuffer bb) {
-        assertEquals("Not enough content", 4, bb.remaining());
-        final int val = bb.getInt();
-        assertEquals(expected, val);
-    }
-
-    private ByteBuffer createPayload(int val) {
-        final ByteBuffer bb = ByteBuffer.allocate(4);
-        bb.putInt(val);
-        bb.rewind();
-        return bb;
-    }
 }
